@@ -4,7 +4,7 @@ Agent Dependency Preflight is a read-only MCP server for checking the readiness 
 
 The operator owns the dependency catalog. MCP clients identify dependencies by logical name rather than supplying arbitrary network destinations such as hostnames, IP addresses, ports, URL schemes, HTTP paths, headers, credentials, request bodies, or redirect destinations.
 
-> **Status:** implementation in progress. The dependency catalog and readiness result contracts are implemented. The network readiness checker and MCP server will be added in subsequent milestones.
+> **Status:** implementation in progress. The dependency catalog, readiness result contracts, and layered network readiness checker are implemented. MCP server integration will be added in the next milestone.
 
 ## Quick start
 
