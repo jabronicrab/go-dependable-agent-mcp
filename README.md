@@ -21,6 +21,10 @@ just inspect  # open MCP Inspector against the server
 
 Run `just --list` for the granular commands behind those four entry points.
 
+> **Tool versions:** the recommended workflow requires `just` 1.56.0 or newer.
+> Older `just` releases do not recognize this repository's minimum-version
+> declaration and may fail with `unknown setting 'minimum-version'`.
+
 ### Windows
 
 Install Go 1.26.0 or newer for the full development workflow and `just`, then run the project setup. The server module itself remains compatible with Go 1.25.0 or newer.
@@ -54,15 +58,28 @@ just inspect
 
 ### macOS
 
-On macOS, Homebrew provides the small bootstrap surface. Install Go and `just`, then let the project setup prepare the remaining tooling:
+The full reviewer workflow requires:
+
+- Go 1.26.0 or newer;
+- `just` 1.56.0 or newer;
+- Node.js 22.19.0 or newer for MCP Inspector.
+
+Homebrew can provide the bootstrap tooling:
 
 ```bash
 brew install go just
+just --version
+node --version
 just setup
 just check
 ```
 
-`just setup` downloads and verifies the Go modules and pinned analysis tools, then installs or updates Homebrew Node.js when needed for MCP Inspector. The macOS Go race detector does **not** require a separate C compiler setup; `just check` still runs `go test -race -count=1 ./...` normally.
+> **Node.js and MCP Inspector:** `just inspect` requires Node.js 22.19.0 or
+> newer. `just setup` installs Node through Homebrew when Node is absent and
+> updates it when it is Homebrew-managed. If an older Node installation managed
+> by another tool is detected, setup stops rather than modifying that external
+> installation; update Node with your existing version manager and rerun
+> `just setup`.
 
 Run the server or Inspector with the same top-level commands:
 
