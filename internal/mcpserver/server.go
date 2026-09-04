@@ -70,9 +70,10 @@ func New(service *preflight.Service, logger *slog.Logger) *mcp.Server {
 	mcp.AddTool(
 		server,
 		&mcp.Tool{
-			Name:        "list_dependencies",
-			Description: "List operator-approved logical dependency names and descriptions without exposing their network destinations.",
-			Annotations: readOnlyAnnotations(false),
+			Name:         "list_dependencies",
+			Description:  "List operator-approved logical dependency names and descriptions without exposing their network destinations.",
+			OutputSchema: listDependenciesOutputSchema(),
+			Annotations:  readOnlyAnnotations(false),
 		},
 		a.listDependencies,
 	)
@@ -80,10 +81,11 @@ func New(service *preflight.Service, logger *slog.Logger) *mcp.Server {
 	mcp.AddTool(
 		server,
 		&mcp.Tool{
-			Name:        "check_dependency",
-			Description: "Check readiness of one operator-approved dependency selected only by logical name.",
-			InputSchema: checkDependencyInputSchema(),
-			Annotations: readOnlyAnnotations(true),
+			Name:         "check_dependency",
+			Description:  "Check readiness of one operator-approved dependency selected only by logical name.",
+			InputSchema:  checkDependencyInputSchema(),
+			OutputSchema: checkDependencyOutputSchema(),
+			Annotations:  readOnlyAnnotations(true),
 		},
 		a.checkDependency,
 	)
@@ -151,20 +153,5 @@ func readOnlyAnnotations(openWorld bool) *mcp.ToolAnnotations {
 		IdempotentHint:  true,
 		OpenWorldHint:   &openWorld,
 		ReadOnlyHint:    true,
-	}
-}
-
-func checkDependencyInputSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"name": map[string]any{
-				"type":        "string",
-				"description": "Operator-approved logical dependency name returned by list_dependencies.",
-				"pattern":     `^[a-z][a-z0-9_-]{0,63}$`,
-			},
-		},
-		"required": []string{"name"},
 	}
 }

@@ -10,6 +10,7 @@ race_cc := if os() == "windows" {
 } else {
     'cc'
 }
+node_min_version := "22.19.0"
 
 # Download module dependencies and verify the module cache.
 setup:
@@ -40,9 +41,18 @@ setup:
 
     Write-Host "Windows race-detector toolchain is ready."
 
-# Perform the complete Windows developer setup, including race-detector support.
+# Install or update Node.js LTS and verify npx for the MCP Inspector demo.
 [windows]
-setup-windows: setup setup-race-windows
+@setup-inspector-windows:
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "winget is required for automated Node.js installation" }
+    $node = Get-Command node.exe -ErrorAction SilentlyContinue; if (-not $node) { Write-Host "Installing Node.js LTS..."; winget install --id OpenJS.NodeJS.LTS --exact --accept-package-agreements --accept-source-agreements } elseif ([version]((& $node.Source --version).TrimStart('v')) -lt [version]'{{node_min_version}}') { Write-Host "Updating Node.js LTS for MCP Inspector compatibility..."; winget upgrade --id OpenJS.NodeJS.LTS --exact --accept-package-agreements --accept-source-agreements } else { Write-Host "Node.js already satisfies the MCP Inspector requirement." }
+    $nodePath = (Get-Command node.exe -ErrorAction SilentlyContinue).Source; if (-not $nodePath) { $candidate = Join-Path $env:ProgramFiles 'nodejs\node.exe'; if (Test-Path $candidate) { $nodePath = $candidate } }; if (-not $nodePath) { throw "Node.js was not found after setup. Open a new PowerShell session and run 'just verify-inspector'." }; $verified = [version]((& $nodePath --version).TrimStart('v')); if ($verified -lt [version]'{{node_min_version}}') { throw "Node.js $verified is installed, but MCP Inspector requires {{node_min_version}} or newer" }; & $nodePath --version
+    $npxPath = (Get-Command npx.cmd -ErrorAction SilentlyContinue).Source; if (-not $npxPath) { $candidate = Join-Path $env:ProgramFiles 'nodejs\npx.cmd'; if (Test-Path $candidate) { $npxPath = $candidate } }; if (-not $npxPath) { throw "npx was not found after Node.js setup. Open a new PowerShell session and try again." }; & $npxPath --version
+    if (-not (Get-Command npx.cmd -ErrorAction SilentlyContinue)) { Write-Host "Node.js is installed, but this PowerShell session has not refreshed PATH. Open a new PowerShell session before running 'just inspector-demo'." }
+
+# Perform the complete Windows developer and reviewer setup.
+[windows]
+setup-windows: setup setup-race-windows setup-inspector-windows
 
 # Format all Go packages.
 fmt:
@@ -79,3 +89,21 @@ check: fmt tidy verify build vet test
 
 # Run the normal validation suite plus the race detector.
 check-race: check test-race
+
+# Run the deterministic local HTTP fixture used by the demo catalog.
+demo-upstream:
+    go run ./cmd/demo-upstream
+
+# Run the MCP server over stdio using the deterministic demo catalog.
+mcp-demo:
+    go run ./cmd/agent-dependency-preflight -config examples/demo/catalog.json
+
+# Verify the Node.js runtime used by the reference MCP Inspector.
+verify-inspector:
+    node --version
+    npx --version
+    node -e "const cur=process.versions.node.split('.').map(Number); const min='{{node_min_version}}'.split('.').map(Number); const ok=cur[0]>min[0] || (cur[0]===min[0] && (cur[1]>min[1] || (cur[1]===min[1] && cur[2]>=min[2]))); if(!ok){console.error('Node.js {{node_min_version}} or newer is required for MCP Inspector'); process.exit(1)}"
+
+# Launch the reference MCP Inspector against the deterministic demo catalog.
+inspector-demo: verify-inspector
+    npx --yes @modelcontextprotocol/inspector go run ./cmd/agent-dependency-preflight -config examples/demo/catalog.json

@@ -123,6 +123,28 @@ func TestServerExposesExactlyTwoToolsWithSecurityAnnotations(t *testing.T) {
 	assertToolAnnotations(t, tools["check_dependency"], true)
 }
 
+func TestToolOutputSchemasUsePortableSingleValueTypes(t *testing.T) {
+	ctx, session, _ := newTestSession(t)
+
+	result, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+
+	for _, tool := range result.Tools {
+		if tool.OutputSchema == nil {
+			t.Fatalf("tool %q has no output schema", tool.Name)
+		}
+
+		data, err := json.Marshal(tool.OutputSchema)
+		if err != nil {
+			t.Fatalf("json.Marshal(%s output schema) error = %v", tool.Name, err)
+		}
+
+		assertPortableSchemaTypes(t, "outputSchema", data)
+	}
+}
+
 func TestListDependenciesReturnsOnlySafeSummaries(t *testing.T) {
 	ctx, session, _ := newTestSession(t)
 
@@ -337,6 +359,39 @@ func firstText(t *testing.T, result *mcp.CallToolResult) string {
 		t.Fatalf("first tool content is %T, want *mcp.TextContent", result.Content[0])
 	}
 	return text.Text
+}
+
+func assertPortableSchemaTypes(t *testing.T, path string, data []byte) {
+	t.Helper()
+
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("json.Unmarshal(%s) error = %v", path, err)
+	}
+
+	walkPortableSchemaTypes(t, path, value)
+}
+
+func walkPortableSchemaTypes(t *testing.T, path string, value any) {
+	t.Helper()
+
+	switch node := value.(type) {
+	case map[string]any:
+		if typeValue, ok := node["type"]; ok {
+			if _, isArray := typeValue.([]any); isArray {
+				t.Fatalf("%s.type uses an array; use a single type or composition for MCP client portability", path)
+			}
+		}
+
+		for key, child := range node {
+			walkPortableSchemaTypes(t, path+"."+key, child)
+		}
+
+	case []any:
+		for _, child := range node {
+			walkPortableSchemaTypes(t, path, child)
+		}
+	}
 }
 
 func assertToolAnnotations(t *testing.T, tool *mcp.Tool, wantOpenWorld bool) {

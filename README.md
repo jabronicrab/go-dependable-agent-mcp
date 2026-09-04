@@ -4,7 +4,7 @@ Agent Dependency Preflight is a read-only MCP server for checking the readiness 
 
 The operator owns the dependency catalog. MCP clients identify dependencies by logical name rather than supplying arbitrary network destinations such as hostnames, IP addresses, ports, URL schemes, HTTP paths, headers, credentials, request bodies, or redirect destinations.
 
-> **Status:** implementation in progress. The dependency catalog, readiness result contracts, and layered network readiness checker are implemented. MCP server integration will be added in the next milestone.
+The MVP is implemented with the official MCP Go SDK `v1.7.0` and stdio transport.
 
 ## Quick start
 
@@ -18,12 +18,6 @@ Install `just`:
 winget install --id Casey.Just --exact
 ```
 
-Verify it:
-
-```powershell
-just --version
-```
-
 Then, from the repository root:
 
 ```powershell
@@ -31,21 +25,14 @@ just setup-windows
 just check-race
 ```
 
-`just setup-windows` performs the normal Go project setup and installs/verifies the Windows toolchain required by Go's race detector.
+`just setup-windows` performs the complete Windows developer/reviewer setup: Go module setup, the MSYS2 UCRT64 GCC toolchain used by Go's race detector, and Node.js LTS plus `npx` for the MCP Inspector demo. Node.js is not required by the MCP server itself.
 
-`just check-race` runs the normal validation suite followed by the race-enabled test suite.
+If Node.js is installed for the first time, open a new PowerShell session before running `just inspector-demo` so the parent shell picks up the updated `PATH`.
 
 ### macOS
 
-Install `just`:
-
 ```bash
 brew install just
-```
-
-Then:
-
-```bash
 just setup
 just check
 ```
@@ -59,177 +46,313 @@ just setup
 just check
 ```
 
-Run:
+Run `just --list` to see all project commands. `just` is optional; the underlying commands are standard Go tooling.
+
+## Two-minute local demo
+
+The demo uses only loopback networking. It does not depend on a public service.
+
+The demo catalog contains three logical dependencies:
+
+| Name | Expected observation |
+| --- | --- |
+| `demo_ready` | HTTP `/ready` returns `200`, so the dependency is `ready` |
+| `demo_unhealthy` | HTTP `/unhealthy` returns `503`, so the dependency is `not_ready` at the HTTP stage |
+| `demo_closed` | nothing listens on port `18081`, so the dependency is `not_ready` at the TCP stage |
+
+An unknown name demonstrates the fail-closed catalog boundary and never reaches the network checker.
+
+### 1. Start the deterministic upstream
+
+In terminal 1:
 
 ```bash
-just --list
+just demo-upstream
 ```
 
-to see all available project commands.
+Expected startup output:
 
-`just` is optional. Every project operation can also be run directly with standard Go tooling.
+```text
+demo upstream listening on http://127.0.0.1:18080
+  GET /ready     -> 200
+  GET /unhealthy -> 503
+```
+
+### 2. Open the MCP Inspector
+
+The reference MCP Inspector requires Node.js 22.19.0 or newer and runs through `npx` without a global Inspector install. On Windows, `just setup-windows` installs or updates Node.js LTS automatically. If you only need the Inspector prerequisite, run:
+
+```powershell
+just setup-inspector-windows
+```
+
+If Node.js was newly installed, open a new PowerShell session before continuing. Verify the Inspector runtime with:
+
+```bash
+just verify-inspector
+```
+
+Then, in terminal 2:
+
+```bash
+just inspector-demo
+```
+
+The Inspector will launch the MCP server over stdio with `examples/demo/catalog.json`.
+
+From the Inspector:
+
+1. call `list_dependencies`;
+2. call `check_dependency` with `{"name":"demo_ready"}`;
+3. call `check_dependency` with `{"name":"demo_unhealthy"}`;
+4. call `check_dependency` with `{"name":"demo_closed"}`;
+5. call `check_dependency` with `{"name":"not_configured"}`.
+
+The first three configured checks are successful MCP tool executions even when the dependency is `not_ready`. The unknown logical name is a tool error because the request itself is outside the operator-approved catalog.
+
+To run the stdio server directly for another MCP client:
+
+```bash
+just mcp-demo
+```
+
+The process then reserves stdout for MCP protocol traffic and writes diagnostics only to stderr.
+
+## Architecture
+
+```text
+MCP client
+    |
+    | logical dependency name only
+    v
+internal/mcpserver
+    |
+    v
+internal/preflight.Service
+    |
+    | exact catalog lookup
+    +---- unknown name ----> tool error, no network access
+    |
+    v
+validated catalog.Dependency
+    |
+    v
+internal/preflight.Checker
+    |
+    +--> DNS
+    +--> TCP
+    +--> optional TLS
+    +--> optional HTTP GET
+```
+
+Package responsibilities are intentionally narrow:
+
+- `internal/catalog` owns strict parsing, validation, immutable lookup, and safe dependency summaries.
+- `internal/preflight` owns the application service, layered readiness checks, result contracts, and safe error classification.
+- `internal/mcpserver` is the only package coupled to the MCP SDK.
+- `cmd/agent-dependency-preflight` owns process composition, configuration loading, signals, stderr logging, and stdio transport.
+- `cmd/demo-upstream` is a deterministic reviewer fixture, not production checking logic.
+
+## Security boundary
+
+The trusted operator controls the catalog file and therefore the set of destinations the server may contact. The MCP caller controls only a logical dependency name.
+
+The MCP tools do **not** accept caller-supplied:
+
+- hostnames or IP addresses;
+- ports;
+- URL schemes or paths;
+- HTTP methods, headers, credentials, or request bodies;
+- redirect destinations;
+- shell commands or SSH parameters.
+
+Additional boundaries in the MVP:
+
+- unknown logical names fail before network access;
+- configuration is parsed once at startup with unknown JSON fields rejected;
+- DNS, TCP, TLS, HTTP, and total execution have bounded deadlines;
+- TCP uses addresses returned by the explicit DNS stage rather than performing a second hostname lookup;
+- TLS performs normal certificate verification with the operating-system trust store and requires TLS 1.2 or newer;
+- HTTP readiness uses a fixed `GET`, does not use environment proxies, does not follow redirects, does not send credentials or a body, limits response headers, and does not consume response bodies;
+- public tool results contain safe categories rather than raw operating-system/network errors;
+- stdout is reserved for MCP protocol traffic when running over stdio.
+
+A result proves only what this process observed from this machine at the reported time. It does not claim a root cause beyond the stage and safe failure category actually observed.
+
+## MCP tools
+
+### `list_dependencies`
+
+Input: empty object.
+
+Returns the approved logical dependency names and descriptions. It deliberately does not expose configured network destinations.
+
+Example structured result:
+
+```json
+{
+  "dependencies": [
+    {
+      "name": "demo_ready",
+      "description": "Local demo HTTP dependency that returns 200 from /ready."
+    }
+  ]
+}
+```
+
+### `check_dependency`
+
+Input:
+
+```json
+{
+  "name": "demo_ready"
+}
+```
+
+The input schema accepts only the logical name. Host, port, scheme, path, and all other network parameters remain operator-owned configuration.
+
+A healthy dependency returns a normal tool result with `status: "ready"`.
+
+An operational failure also returns a normal tool result, but with `status: "not_ready"`, the failed stage, stage-by-stage evidence, and a safe failure category. Later stages are marked `not_attempted` with a reason when an earlier stage fails.
+
+An unknown dependency is different: it is a tool-level error with category `unknown_dependency`, because the requested name is not authorized by the catalog.
+
+Both tools are annotated read-only, non-destructive, and idempotent. `check_dependency` is marked open-world because it observes external service state; `list_dependencies` is closed-world because it only reads the startup catalog snapshot.
+
+## Dependency catalog
+
+A catalog is strict JSON and is loaded once at startup. See [`examples/demo/catalog.json`](examples/demo/catalog.json) for a complete example.
+
+```json
+{
+  "version": 1,
+  "timeouts": {
+    "total": "3s",
+    "dns": "500ms",
+    "tcp": "500ms",
+    "tls": "1s",
+    "http": "1s"
+  },
+  "dependencies": [
+    {
+      "name": "api",
+      "description": "Application readiness endpoint",
+      "protocol": "https",
+      "host": "api.example.com",
+      "port": 443,
+      "http": {
+        "path": "/ready",
+        "accepted_statuses": [200, 204]
+      }
+    }
+  ]
+}
+```
+
+Supported protocols are `tcp`, `tls`, `http`, and `https`.
+
+For `http` and `https`, the operator must configure a path and one or more accepted HTTP statuses. HTTP settings are rejected for `tcp` and `tls` dependencies. Invalid ports, hosts, paths, duplicate names/statuses, unsupported versions/protocols, missing timeouts, excessive timeouts, unknown fields, trailing JSON values, and oversized catalogs fail startup.
+
+## Running the MCP server
+
+Using `just`:
+
+```bash
+just mcp-demo
+```
+
+Using Go directly with your own catalog:
+
+```bash
+go run ./cmd/agent-dependency-preflight -config path/to/catalog.json
+```
+
+The server uses stdio transport. A real MCP client should launch the command rather than treating stdout as a human-readable console.
 
 ## Prerequisites
 
 ### Required
 
-* [Go](https://go.dev/) 1.25.0 or newer
-* [Git](https://git-scm.com/)
+- [Go](https://go.dev/) 1.25.0 or newer
+- [Git](https://git-scm.com/)
 
-Development is currently using Go 1.27.1 on Windows/amd64.
+Development and final Windows validation used Go 1.27.1 on Windows/amd64.
 
 ### Recommended development tooling
 
-* [`just`](https://github.com/casey/just) 1.56.0 or newer
+- [`just`](https://github.com/casey/just) 1.56.0 or newer
 
 The project is currently developed against `just` 1.58.0.
 
-`just` provides convenient names for the project's standard setup, formatting, build, test, static-analysis, and validation commands. It does not contain application logic.
+### Optional demo tooling
+
+- Node.js 22.19.0 or newer for the current MCP Inspector
+
+Node.js is only needed for the optional Inspector workflow; the Go MCP server itself does not require Node.js, npm, or npx.
+
+On Windows, the complete setup installs or updates Node.js LTS automatically:
+
+```powershell
+just setup-windows
+```
+
+To install only the Inspector prerequisite:
+
+```powershell
+just setup-inspector-windows
+```
+
+Manual Windows equivalent:
+
+```powershell
+winget install --id OpenJS.NodeJS.LTS --exact
+```
+
+After a first-time Node.js installation, open a new PowerShell session, then verify:
+
+```powershell
+node --version
+npx --version
+```
 
 ### Windows race-detector tooling
 
-The application itself does not require cgo or a C compiler.
+The application itself does not require cgo or a C compiler. Go's race detector does.
 
-Go's race detector does require cgo and, on Windows, a compatible C compiler. The Windows development workflow uses MSYS2 UCRT64 GCC for this purpose.
-
-The recommended setup:
+The recommended Windows setup is:
 
 ```powershell
 just setup-windows
 ```
 
-installs and verifies this toolchain automatically.
+This performs the standard Go module setup, installs/verifies MSYS2 UCRT64 GCC at the standard `C:\msys64` location, and installs/verifies Node.js LTS for the optional MCP Inspector. The project does not permanently modify global `CGO_ENABLED`; the race recipe supplies cgo and the GCC path only for that command.
 
-## Setup
+## Setup without `just`
 
-### Clone the repository
-
-```bash
-git clone https://github.com/jabronicrab/go-dependable-agent-mcp.git
-cd go-dependable-agent-mcp
-```
-
-### Standard setup with `just`
-
-On any supported platform:
+Download and verify modules:
 
 ```bash
-just setup
-```
-
-This runs:
-
-```text
 go mod download
 go mod verify
 ```
 
-Run the standard validation suite with:
-
-```bash
-just check
-```
-
-### Complete Windows setup with race detection
-
-On Windows:
-
-```powershell
-just setup-windows
-```
-
-The command performs the standard Go setup and then asks before installing or updating the Windows race-detector toolchain.
-
-It:
-
-1. verifies that Windows Package Manager (`winget`) is available;
-2. installs MSYS2 if necessary;
-3. updates the MSYS2 installation;
-4. installs the MSYS2 UCRT64 GCC compiler;
-5. verifies the compiler;
-6. verifies that the compiler provides the runtime required by Go's Windows race detector.
-
-The setup expects the standard MSYS2 installation location:
-
-```text
-C:\msys64
-```
-
-The project does not permanently add GCC to the Windows `PATH`.
-
-When race-enabled tests are run through `just`, the `justfile` supplies the compiler explicitly and enables cgo only for that recipe.
-
-After setup:
-
-```powershell
-just test-race
-```
-
-or run the complete validation suite:
-
-```powershell
-just check-race
-```
-
-## Manual setup without `just`
-
-`just` is only a convenience wrapper. The project can be built and validated entirely with standard Go tooling.
-
-Verify Go:
-
-```bash
-go version
-```
-
-Download dependencies:
-
-```bash
-go mod download
-```
-
-Verify downloaded modules:
-
-```bash
-go mod verify
-```
-
-Format the Go packages:
-
-```bash
-go fmt ./...
-```
-
-Normalize `go.mod` and `go.sum`:
-
-```bash
-go mod tidy
-```
-
-Build all packages:
+Build, vet, and test:
 
 ```bash
 go build ./...
-```
-
-Run Go's static analysis:
-
-```bash
 go vet ./...
-```
-
-Run the test suite without cached test results:
-
-```bash
 go test -count=1 ./...
 ```
 
-## Manual Windows race-detector setup
+Format and normalize module metadata when developing:
 
-The steps below are the manual equivalent of:
-
-```powershell
-just setup-windows
+```bash
+go fmt ./...
+go mod tidy
 ```
+
+### Manual Windows race-detector setup
 
 Install MSYS2:
 
@@ -237,115 +360,54 @@ Install MSYS2:
 winget install --id MSYS2.MSYS2 --exact
 ```
 
-Update MSYS2:
+Update it and install UCRT64 GCC:
 
 ```powershell
 & 'C:\msys64\usr\bin\bash.exe' -lc 'pacman --noconfirm -Syuu'
 & 'C:\msys64\usr\bin\bash.exe' -lc 'pacman --noconfirm -Syuu'
-```
-
-Install the UCRT64 GCC compiler:
-
-```powershell
 & 'C:\msys64\usr\bin\bash.exe' -lc 'pacman --noconfirm --needed -S mingw-w64-ucrt-x86_64-gcc'
 ```
 
-Verify GCC:
+Verify the compiler and Windows race runtime:
 
 ```powershell
 & 'C:\msys64\ucrt64\bin\gcc.exe' --version
-```
-
-Verify that the runtime required by the Go race detector is available:
-
-```powershell
 & 'C:\msys64\ucrt64\bin\gcc.exe' --print-file-name libsynchronization.a
 ```
 
-The second command should return a full path ending in:
+The second command must return a full path ending in `libsynchronization.a`, not only the filename.
 
-```text
-libsynchronization.a
-```
-
-Returning only the filename indicates that the compiler does not satisfy the Go race detector's Windows requirements.
-
-Run the race-enabled tests:
+Then run:
 
 ```powershell
 $env:CGO_ENABLED = "1"
 $env:CC = "C:\msys64\ucrt64\bin\gcc.exe"
-
 go test -race -count=1 ./...
 ```
 
-These environment variables apply only to the current PowerShell session.
+## Development and validation
 
-## Development
-
-The `justfile` provides shortcuts for the common development and validation commands.
-
-List available recipes:
+List the available recipes:
 
 ```bash
 just --list
 ```
 
-### Format
+Common commands:
 
 ```bash
 just fmt
-```
-
-Equivalent command:
-
-```bash
-go fmt ./...
-```
-
-### Build
-
-```bash
 just build
-```
-
-Equivalent command:
-
-```bash
-go build ./...
-```
-
-### Test
-
-```bash
-just test
-```
-
-Equivalent command:
-
-```bash
-go test -count=1 ./...
-```
-
-### Static analysis
-
-```bash
 just vet
-```
-
-Equivalent command:
-
-```bash
-go vet ./...
-```
-
-### Standard validation
-
-```bash
+just test
 just check
+just check-race
+just verify-inspector
+just demo-upstream
+just inspector-demo
 ```
 
-This runs:
+`just check` runs:
 
 ```text
 go fmt ./...
@@ -356,30 +418,33 @@ go vet ./...
 go test -count=1 ./...
 ```
 
-`go fmt` and `go mod tidy` may modify files. Review any resulting working-tree changes before committing them.
-
-### Race-enabled validation
-
-```bash
-just check-race
-```
-
-This runs the standard validation suite followed by:
+`just check-race` adds:
 
 ```text
 go test -race -count=1 ./...
 ```
 
-On Windows, the race recipe enables cgo and points Go at the MSYS2 UCRT64 GCC compiler without permanently changing the machine's Go environment or `PATH`.
+Tests are deterministic and use local/in-memory fixtures. They do not require public network services. MCP integration tests use the official SDK's in-memory client/server transports so they exercise tool discovery, input validation, tool-error behavior, and structured output through the MCP layer.
 
-## Planned MCP surface
+## Current limitations
 
-The MVP will expose two read-only MCP tools:
+This take-home deliberately keeps the MVP narrow. It does not currently provide:
 
-* `list_dependencies` returns approved logical dependency names and descriptions.
-* `check_dependency` checks one approved dependency through its configured DNS, TCP, optional TLS, and optional HTTP stages.
+- Streamable HTTP transport;
+- authentication or tenant isolation;
+- rate limiting, concurrency limits, or load shedding;
+- destination IP-class restrictions or a broader SSRF/rebinding policy for untrusted catalog authors;
+- dynamic configuration reload;
+- HTTP body-content assertions;
+- remediation actions;
+- shell, SSH, subnet scanning, or arbitrary port scanning;
+- production tracing/metrics or distributed deployment support.
 
-Unknown logical dependency names fail closed and are never interpreted as hostnames or URLs.
+The stdio MVP assumes a trusted local operator controls the process and catalog. Those omissions should be addressed before exposing this server as a shared or remotely reachable service.
+
+## LLM assistance
+
+LLM assistance was used for product exploration, MCP SDK/specification research, implementation review, and test-case generation. Product scope, security boundaries, implementation decisions, code review, and validation remained human-reviewed. See [`DECISIONS.md`](DECISIONS.md) for additional design rationale.
 
 ## License
 

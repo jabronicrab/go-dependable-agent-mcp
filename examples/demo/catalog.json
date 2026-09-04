@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "timeouts": {
+    "total": "3s",
+    "dns": "500ms",
+    "tcp": "500ms",
+    "tls": "1s",
+    "http": "1s"
+  },
+  "dependencies": [
+    {
+      "name": "demo_closed",
+      "description": "Local demo dependency with no listener, demonstrating a TCP connection failure.",
+      "protocol": "tcp",
+      "host": "127.0.0.1",
+      "port": 18081
+    },
+    {
+      "name": "demo_ready",
+      "description": "Local demo HTTP dependency that returns 200 from /ready.",
+      "protocol": "http",
+      "host": "localhost",
+      "port": 18080,
+      "http": {
+        "path": "/ready",
+        "accepted_statuses": [200]
+      }
+    },
+    {
+      "name": "demo_unhealthy",
+      "description": "Local demo HTTP dependency that returns 503 from /unhealthy.",
+      "protocol": "http",
+      "host": "localhost",
+      "port": 18080,
+      "http": {
+        "path": "/unhealthy",
+        "accepted_statuses": [200]
+      }
+    }
+  ]
+}
