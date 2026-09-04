@@ -1,5 +1,7 @@
 # Dependable Agent MCP
 
+[![Validate](https://github.com/jabronicrab/go-dependable-agent-mcp/actions/workflows/validate.yml/badge.svg)](https://github.com/jabronicrab/go-dependable-agent-mcp/actions/workflows/validate.yml)
+
 Dependable Agent MCP is a read-only MCP server for checking the readiness of operator-approved service dependencies without giving an AI agent unrestricted shell or network access.
 
 The operator owns the dependency catalog. MCP clients select dependencies by logical name rather than supplying arbitrary hostnames, IP addresses, ports, URL schemes, HTTP paths, headers, credentials, request bodies, or redirect destinations.
