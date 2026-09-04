@@ -30,6 +30,15 @@ const (
 	StageNotApplicable StageStatus = "not_applicable"
 )
 
+// StageReason explains why a readiness stage did not run.
+type StageReason string
+
+const (
+	StageReasonPriorStageFailed      StageReason = "prior_stage_failed"
+	StageReasonProtocolNotApplicable StageReason = "protocol_not_applicable"
+	StageReasonLiteralIP             StageReason = "literal_ip"
+)
+
 // ErrorCategory is the stable caller-facing classification of a failure.
 type ErrorCategory string
 
@@ -65,6 +74,7 @@ type StageResult struct {
 	Name       StageName   `json:"name"`
 	Status     StageStatus `json:"status"`
 	DurationMS int64       `json:"duration_ms"`
+	Reason     StageReason `json:"reason,omitempty"`
 }
 
 // Result is the complete domain result of checking one configured dependency.
@@ -76,4 +86,12 @@ type Result struct {
 	FailedStage StageName     `json:"failed_stage,omitempty"`
 	Error       *Failure      `json:"error,omitempty"`
 	Stages      []StageResult `json:"stages"`
+
+	cause error
+}
+
+// Cause returns the internal diagnostic cause of a failed check. The value is
+// deliberately excluded from JSON and must never be exposed directly to MCP callers.
+func (r Result) Cause() error {
+	return r.cause
 }

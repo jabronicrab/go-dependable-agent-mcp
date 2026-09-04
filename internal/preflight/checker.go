@@ -25,6 +25,8 @@ const (
 	httpStageIndex
 )
 
+var errInconsistentDependency = errors.New("dependency configuration is inconsistent with the readiness checker")
+
 type resolver interface {
 	LookupHost(
 		context.Context,
@@ -120,6 +122,7 @@ func (c *Checker) Check(
 				stages,
 				StageDNS,
 				failure,
+				err,
 			)
 		}
 
@@ -131,6 +134,8 @@ func (c *Checker) Check(
 	} else {
 		stages[dnsStageIndex].Status =
 			StageNotApplicable
+		stages[dnsStageIndex].Reason =
+			StageReasonLiteralIP
 	}
 
 	stageStartedAt := c.now()
@@ -165,6 +170,7 @@ func (c *Checker) Check(
 			stages,
 			StageTCP,
 			failure,
+			err,
 		)
 	}
 
@@ -188,16 +194,19 @@ func (c *Checker) Check(
 			timeouts.TLS,
 		)
 
+		tlsConfig := &tls.Config{
+			ServerName: dependency.Host,
+			RootCAs:    c.rootCAs,
+			MinVersion: tls.VersionTLS12,
+		}
+
+		if dependency.Protocol == catalog.ProtocolHTTPS {
+			tlsConfig.NextProtos = []string{"http/1.1"}
+		}
+
 		tlsConn := tls.Client(
 			activeConn,
-			&tls.Config{
-				ServerName: dependency.Host,
-				RootCAs:    c.rootCAs,
-				MinVersion: tls.VersionTLS12,
-				NextProtos: []string{
-					"http/1.1",
-				},
-			},
+			tlsConfig,
 		)
 
 		activeConn = tlsConn
@@ -227,6 +236,7 @@ func (c *Checker) Check(
 				stages,
 				StageTLS,
 				failure,
+				err,
 			)
 		}
 
@@ -274,6 +284,7 @@ func (c *Checker) Check(
 				stages,
 				StageHTTP,
 				failure,
+				err,
 			)
 		}
 
@@ -467,12 +478,16 @@ func initialStages(
 		protocol == catalog.ProtocolHTTP {
 		stages[tlsStageIndex].Status =
 			StageNotApplicable
+		stages[tlsStageIndex].Reason =
+			StageReasonProtocolNotApplicable
 	}
 
 	if protocol == catalog.ProtocolTCP ||
 		protocol == catalog.ProtocolTLS {
 		stages[httpStageIndex].Status =
 			StageNotApplicable
+		stages[httpStageIndex].Reason =
+			StageReasonProtocolNotApplicable
 	}
 
 	return stages
@@ -525,7 +540,15 @@ func (c *Checker) failureResult(
 	stages []StageResult,
 	failedStage StageName,
 	failure *Failure,
+	cause error,
 ) Result {
+	for i := range stages {
+		if stages[i].Status == StageNotAttempted &&
+			stages[i].Reason == "" {
+			stages[i].Reason = StageReasonPriorStageFailed
+		}
+	}
+
 	return Result{
 		Dependency: dependency.Name,
 		Status:     StatusNotReady,
@@ -537,6 +560,7 @@ func (c *Checker) failureResult(
 		FailedStage: failedStage,
 		Error:       failure,
 		Stages:      stages,
+		cause:       cause,
 	}
 }
 
@@ -555,10 +579,10 @@ func (c *Checker) internalFailure(
 		),
 		Error: &Failure{
 			Category: ErrorInternal,
-			Message: "dependency configuration is " +
-				"inconsistent with the readiness checker",
+			Message:  errInconsistentDependency.Error(),
 		},
 		Stages: stages,
+		cause:  errInconsistentDependency,
 	}
 }
 
