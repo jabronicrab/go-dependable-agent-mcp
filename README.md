@@ -377,7 +377,7 @@ Development and final Windows validation used Go 1.27.1 on Windows/amd64 and `ju
 
 ### Inspector
 
-The current MCP Inspector requires Node.js 22.19.0 or newer. Node.js is only needed for `just inspect`; the Go MCP server itself does not require Node.js, npm, or npx.
+The pinned MCP Inspector 2.5.0 requires Node.js 22.19.0 or newer. Node.js is only needed for `just inspect`; the Go MCP server itself does not require Node.js, npm, or npx.
 
 On Windows, `just setup` installs or updates Node.js LTS automatically. On macOS, `just setup` installs or updates the Homebrew `node` package when needed.
 
@@ -447,7 +447,7 @@ The additional analysis commands used by `just check` are:
 
 ```bash
 go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
-go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 ```
 
 ## Testing

@@ -11,8 +11,9 @@ race_cc := if os() == "windows" {
     'cc'
 }
 node_min_version := "22.19.0"
+inspector_version := "2.5.0"
 staticcheck_version := "v0.8.1"
-govulncheck_version := "v1.1.4"
+govulncheck_version := "v1.7.0"
 
 # Set up all Windows development and reviewer prerequisites.
 [windows]
@@ -127,7 +128,7 @@ verify-inspector:
 
 # Launch the reference MCP Inspector against the server and selected catalog.
 inspect config="examples/demo/catalog.json": verify-inspector
-    npx --yes @modelcontextprotocol/inspector go run ./cmd/agent-dependency-preflight -config "{{config}}"
+    npx --yes @modelcontextprotocol/inspector@{{inspector_version}} go run ./cmd/agent-dependency-preflight -config "{{config}}"
 
 # Run the deterministic local HTTP fixture used by the demo catalog.
 demo-upstream:
